@@ -5,6 +5,9 @@ from rest_framework.response import Response
 from rest_framework import status
 from .services import OrderService, InsufficientStockError
 
+from order.cache_manager import CacheManager
+from order.models import Product
+
 logger = logging.getLogger('django')
 
 
@@ -39,3 +42,27 @@ class BatchOrderAPIView(APIView):
             "order_id": order_service.order.id if order_service.order else None,
             "details": results
         }, status=status.HTTP_201_CREATED)
+
+
+class ProductSearchAPIView(APIView):
+    def get(self, request, *args, **kwargs):
+        query = request.query_params.get('q', '')
+        if not query:
+            return Response({"error": "搜索关键字不能为空"}, status=status.HTTP_400_BAD_REQUEST)
+
+        cache = CacheManager()
+
+        # 从缓存获取
+        cached_product_ids = cache.get_search_results(query)
+        if cached_product_ids is not None:
+            products = Product.objects.filter(id__in=cached_product_ids)
+            return Response([{"id": p.id, "name": p.name, "price": str(p.price)} for p in products])
+
+        # 缓存未命中，查询数据库
+        products = Product.objects.filter(name__icontains=query)
+        product_ids = list(products.values_list('id', flat=True))
+
+        # 写入缓存
+        cache.set_search_results(query, product_ids)
+
+        return Response([{"id": p.id, "name": p.name, "price": str(p.price)} for p in products])
